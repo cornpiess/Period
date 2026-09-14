@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Period",
+    "slug": "period-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/www/icon-512.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.period.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/www/icon-512-maskable.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.period.app"
+    },
+    "plugins": [
+      "expo-asset"
+    ]
+  }
+}
