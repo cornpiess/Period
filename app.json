@@ -6,10 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/www/icon-512.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "backgroundColor": "#FFFFFF"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.period.app"
