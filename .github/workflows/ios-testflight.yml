@@ -1,0 +1,37 @@
+name: iOS Build to TestFlight
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods dependencies
+        run: cd ios && pod install
+
+      - name: Install Fastlane
+        run: gem install fastlane --no-document
+
+      - name: Build and upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: fastlane ios testflight
