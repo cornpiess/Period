@@ -1,0 +1,68 @@
+name: ASC Setup App
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Register bundle ID and create App Store Connect app record
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+        run: |
+          node -e '
+          const crypto = require("crypto");
+          const key = Buffer.from(process.env.ASC_KEY_CONTENT, "base64").toString("utf8");
+          const b64u = (b) => Buffer.from(b).toString("base64url");
+          const now = Math.floor(Date.now() / 1000);
+          const h = b64u(JSON.stringify({ alg: "ES256", kid: process.env.ASC_KEY_ID }));
+          const p = b64u(JSON.stringify({ iss: process.env.ASC_ISSUER_ID, iat: now, exp: now + 600, aud: "appstoreconnect-v1" }));
+          const sig = crypto.sign("sha256", Buffer.from(h + "." + p), { key, dsaEncoding: "ieee-p1363" });
+          const jwt = h + "." + p + "." + sig.toString("base64url");
+          const API = "https://api.appstoreconnect.apple.com/v1";
+          const headers = { Authorization: "Bearer " + jwt, "Content-Type": "application/json" };
+          const BUNDLE = "com.period.app";
+
+          async function req(method, path, body) {
+            const r = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+            const text = await r.text();
+            let json = null;
+            try { json = JSON.parse(text); } catch (e) {}
+            return { status: r.status, json, text };
+          }
+
+          (async () => {
+            // 1. Register bundle ID if missing
+            const bids = await req("GET", "/bundleIds?limit=200");
+            const hasBid = ((bids.json && bids.json.data) || []).some((b) => b.attributes.identifier === BUNDLE);
+            console.log("BUNDLE_ALREADY_REGISTERED:", hasBid);
+            if (!hasBid) {
+              const created = await req("POST", "/bundleIds", {
+                data: { type: "bundleIds", attributes: { identifier: BUNDLE, platform: "IOS", name: "Period" } },
+              });
+              console.log("BUNDLE_REGISTER_STATUS:", created.status);
+              if (created.status !== 201) { console.log("BUNDLE_REGISTER_ERROR:", created.text.slice(0, 800)); process.exit(1); }
+              console.log("BUNDLE_REGISTERED:", BUNDLE);
+            }
+
+            // 2. Create ASC app record if missing
+            const apps = await req("GET", "/apps?limit=200");
+            const hasApp = ((apps.json && apps.json.data) || []).some((a) => a.attributes.bundleId === BUNDLE);
+            console.log("APP_ALREADY_EXISTS:", hasApp);
+            if (!hasApp) {
+              const created = await req("POST", "/apps", {
+                data: { type: "apps", attributes: { name: "Period", bundleId: BUNDLE, sku: BUNDLE, primaryLanguage: "zh-Hans" } },
+              });
+              console.log("APP_CREATE_STATUS:", created.status);
+              if (created.status !== 201) { console.log("APP_CREATE_ERROR:", created.text.slice(0, 800)); process.exit(1); }
+              console.log("APP_CREATED_ID:", created.json.data.id);
+            }
+
+            console.log("SETUP_COMPLETE");
+          })().catch((e) => { console.error("ERR", e.message); process.exit(1); });
+          '
