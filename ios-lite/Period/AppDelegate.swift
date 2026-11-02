@@ -58,7 +58,7 @@ final class PeriodController: UIViewController, WKUIDelegate, WKNavigationDelega
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-period-smoke") && !ProcessInfo.processInfo.arguments.contains("-period-smoke-relaunch") {
             let seed = """
-            (() => {const d=new Date();d.setDate(d.getDate()-60);const f=x=>x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');const start=f(d);d.setDate(d.getDate()+6);localStorage.setItem('period-tracker-v4',JSON.stringify([{id:'legacy-smoke',startDate:start,endDate:f(d)}]));localStorage.setItem('period-algo-version','1.2');})();
+            (() => {const d=new Date();d.setDate(d.getDate()-60);const f=x=>x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');const start=f(d);d.setDate(d.getDate()+6);localStorage.setItem('period-tracker-v4',JSON.stringify([{id:'legacy-smoke',startDate:start,endDate:f(d)}]));localStorage.setItem('period-algo-version','1.2');localStorage.setItem('period-v13-migrated','1');})();
             """
             config.userContentController.addUserScript(WKUserScript(source: seed, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }

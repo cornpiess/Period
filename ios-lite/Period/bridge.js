@@ -19,6 +19,9 @@
   }
   const initial = call({ action: "bootstrap", legacy });
   snapshot = initial.values;
+  // The authoritative native document is durable now. Remove the obsolete
+  // browser copy so later deletions don't leave a second stale history behind.
+  for (const key of keys) originalRemove.call(backing, key);
   Storage.prototype.getItem = function (key) {
     key = String(key);
     if (this === backing && keys.includes(key)) return snapshot[key] ?? null;

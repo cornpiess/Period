@@ -105,6 +105,11 @@ final class RecordStore {
             for key in Self.supportedKeys {
                 if let value = values[key] { try update(key, value, in: &next) }
             }
+            // Match the shared v1.3 migration: older built-in defaults upgrade,
+            // while custom algorithms and post-migration manual choices stay.
+            if values["period-v13-migrated"] != "1", next.values[Self.versionKey] != "custom" {
+                next.values[Self.versionKey] = "1.3"
+            }
         }
         next.legacyImported = true
         try persist(next)
