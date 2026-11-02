@@ -1,0 +1,8 @@
+{
+  "appId": "com.period.app",
+  "appName": "Period",
+  "webDir": "../tusi-web-dist",
+  "android": {
+    "allowMixedContent": true
+  }
+}

@@ -9,7 +9,11 @@ npm-debug.*
 *.mobileprovision
 *.orig.*
 web-build/
+*.log
 base.apk.1
 Period-PWA.zip
-ios/
-android/
+/ios/
+/android/
+
+# Capacitor
+android-lite/android/app/src/main/assets/public/
