@@ -69,13 +69,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(ls android-lite/android/app/build/outputs/apk/release/*.apk | head -1)
-          SIZE=$(du -m "$APK" | cut -f1)
+          VN=$(grep -oP 'versionName "\K[^"]+' android-lite/android/app/build.gradle)
+          cp "$APK" "Period-lite-$VN-android.apk"
           gh release view android-v1.0.0 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create android-v1.0.0 -R "$GITHUB_REPOSITORY" \
               --title "Period Android v1.0.0" \
-              --notes "轻量版 APK（Capacitor WebView 壳）。"
-          gh release upload android-v1.0.0 "$APK#Period-lite-1.0.1-android.apk" -R "$GITHUB_REPOSITORY" --clobber
-          echo "uploaded $SIZE MB"
+              --notes "Period-lite：轻量版 APK（Capacitor WebView 壳，约 3MB，推荐）。"
+          gh release upload android-v1.0.0 "Period-lite-$VN-android.apk" -R "$GITHUB_REPOSITORY" --clobber
 
   # Expo 全功能壳（RN 运行时，~66MB）：保留作为备用
   apk:
