@@ -50,3 +50,18 @@ Automated tests cover engineering behavior and illustrative scenarios. They do
 not establish real-world accuracy superiority over v1.2. That requires independent
 consecutive-cycle data and user-level held-out evaluation, including irregular,
 changing, long-cycle and incomplete tracking histories.
+
+## Android distribution
+
+Android uses only the lightweight Capacitor app in `android-lite/`. The retired
+Expo Android build is no longer built or distributed; Expo remains for iOS.
+Package identity stays `com.period.app`. Releases use the existing
+`ANDROID_KEYSTORE_BASE64` and `ANDROID_KEY_*` secrets shared with the original
+full APK; never regenerate that signing key. Increment `versionCode` for each
+release so existing installs can update.
+
+Android 8+ launcher icons use separate full-bleed gradient and transparent
+brand foreground vectors. Android 13+ also has a monochrome layer. Launcher
+settings determine the final mask (rounded rectangle, circle, etc.).
+The release job checks signing/package continuity before upload, then removes
+only the retired `Period-1.0.0-android.apk` asset and updates the download notes.

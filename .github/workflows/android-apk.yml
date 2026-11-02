@@ -2,9 +2,15 @@ name: Android APK Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - android-lite/**
+      - .github/workflows/android-apk.yml
+      - scripts/verify-android-release.sh
 
 jobs:
-  # 轻量壳（Capacitor，纯系统 WebView，~5MB）：日常发布用这个
+  # Android 仅发布轻量壳；继续使用原 Expo 大包的签名密钥。
   lite:
     runs-on: ubuntu-latest
     permissions:
@@ -64,6 +70,11 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: cd android-lite/android && chmod +x gradlew && ./gradlew assembleRelease
 
+      - name: Verify signing continuity and package identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify-android-release.sh
+
       - name: Upload APK to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,84 +84,26 @@ jobs:
           cp "$APK" "Period-lite-$VN-android.apk"
           gh release view android-v1.0.0 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create android-v1.0.0 -R "$GITHUB_REPOSITORY" \
-              --title "Period Android v1.0.0" \
-              --notes "Period-lite：轻量版 APK（Capacitor WebView 壳，约 3MB，推荐）。"
+              --title "Period Android" \
+              --notes "Period Android：轻量安装包，沿用原版包名与签名。"
           gh release upload android-v1.0.0 "Period-lite-$VN-android.apk" -R "$GITHUB_REPOSITORY" --clobber
 
-  # Expo 全功能壳（RN 运行时，~66MB）：保留作为备用
-  apk:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
-
-      - name: Generate native Android project
-        run: npx expo prebuild -p android --no-install
-
-      - name: Decode signing keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/period.keystore
-          ls -la android/app/period.keystore
-
-      - name: Inject release signing config
-        run: |
-          cat >> android/app/build.gradle <<'EOF'
-
-          // CI signing config appended by workflow
-          android {
-              signingConfigs {
-                  release {
-                      storeFile file("period.keystore")
-                      storePassword System.getenv("KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("KEY_ALIAS")
-                      keyPassword System.getenv("KEY_PASSWORD")
-                  }
-              }
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                  }
-              }
-          }
-          EOF
-
-      - name: Build release APK
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: cd android && chmod +x gradlew && ./gradlew assembleRelease
-
-      - name: Rename APK
-        run: |
-          VERSION=$(node -p "require('./app.json').expo.version")
-          cp android/app/build/outputs/apk/release/app-release.apk "Period-$VERSION-android.apk"
-          ls -la Period-*.apk
-
-      - name: Upload APK to GitHub Release
+      - name: Remove retired full APK and update download description
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION=$(node -p "require('./app.json').expo.version")
-          TAG="android-v$VERSION"
-          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
-              --title "Period Android v$VERSION" \
-              --notes "Android APK v$VERSION. 直接下载 Period-$VERSION-android.apk 安装（需允许安装未知来源应用）。"
-          gh release upload "$TAG" "Period-$VERSION-android.apk" -R "$GITHUB_REPOSITORY" --clobber
+          # Delete only the explicitly retired full package, after verifying the replacement.
+          FULL=$(gh release view android-v1.0.0 -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name == "Period-1.0.0-android.apk") | .name')
+          if [ -n "$FULL" ]; then
+            gh release delete-asset android-v1.0.0 "$FULL" -R "$GITHUB_REPOSITORY" --yes
+          fi
+          VN=$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' android-lite/android/app/build.gradle)
+          cat > /tmp/android-release-notes.md <<EOF
+          Android 仅提供轻量安装包（约 3.5 MB）。
+
+          最新版本：**Period-lite-$VN-android.apk**，包含 V1.3 算法与 Android 自适应图标。
+
+          沿用原版包名 com.period.app 与同一签名，versionCode 已递增。旧大安装包已停用并删除。
+          EOF
+          gh release edit android-v1.0.0 -R "$GITHUB_REPOSITORY" --title "Period Android" --notes-file /tmp/android-release-notes.md
