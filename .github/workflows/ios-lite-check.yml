@@ -7,9 +7,13 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ios-lite-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   verify:
     runs-on: macos-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

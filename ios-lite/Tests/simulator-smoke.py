@@ -3,15 +3,19 @@ import pathlib
 import subprocess
 import time
 
-def run(*args):
-    return subprocess.check_output(args, text=True).strip()
+def run(*args, timeout=120):
+    print('RUN', ' '.join(args), flush=True)
+    return subprocess.check_output(args, text=True, timeout=timeout).strip()
 
 devices = json.loads(run('xcrun', 'simctl', 'list', 'devices', 'available', '-j'))['devices']
-device = next(d for group in devices.values() for d in group if 'iPhone' in d['name'])
+ios_runtimes = sorted((key for key in devices if '.iOS-' in key),
+                      key=lambda key: tuple(int(p) for p in key.split('iOS-')[1].split('-')),
+                      reverse=True)
+device = next(d for runtime in ios_runtimes for d in devices[runtime] if 'iPhone' in d['name'])
 udid = device['udid']
 if device['state'] != 'Booted':
     run('xcrun', 'simctl', 'boot', udid)
-run('xcrun', 'simctl', 'bootstatus', udid, '-b')
+run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
 run('xcrun', 'simctl', 'install', udid, 'ios-lite/build/simulator/Build/Products/Debug-iphonesimulator/Period.app')
 container = pathlib.Path(run('xcrun', 'simctl', 'get_app_container', udid, 'com.cornpiess.period', 'data'))
 result = container / 'Documents/simulator-smoke.json'
