@@ -1,0 +1,57 @@
+name: Verify ASC Credentials
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check ASC API access and app record
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          node -e '
+          const crypto = require("crypto");
+          const key = Buffer.from(process.env.ASC_KEY_CONTENT, "base64").toString("utf8");
+          if (!key.includes("PRIVATE KEY")) { console.log("KEY_CONTENT_INVALID"); process.exit(1); }
+          const b64u = (b) => Buffer.from(b).toString("base64url");
+          const now = Math.floor(Date.now() / 1000);
+          const h = b64u(JSON.stringify({ alg: "ES256", kid: process.env.ASC_KEY_ID }));
+          const p = b64u(JSON.stringify({ iss: process.env.ASC_ISSUER_ID, iat: now, exp: now + 600, aud: "appstoreconnect-v1" }));
+          const sig = crypto.sign("sha256", Buffer.from(h + "." + p), { key, dsaEncoding: "ieee-p1363" });
+          const jwt = h + "." + p + "." + sig.toString("base64url");
+          const headers = { Authorization: "Bearer " + jwt };
+
+          async function get(url) {
+            const r = await fetch(url, { headers });
+            return { status: r.status, body: await r.json().catch(() => null) };
+          }
+
+          (async () => {
+            const apps = await get("https://api.appstoreconnect.apple.com/v1/apps?limit=200");
+            console.log("APPS_HTTP_STATUS:", apps.status);
+            if (apps.status === 401 || apps.status === 403) {
+              console.log("CREDENTIALS_REJECTED");
+              process.exit(1);
+            }
+            const list = (apps.body && apps.body.data) || [];
+            console.log("APP_COUNT:", list.length);
+            for (const a of list) {
+              console.log("APP:", a.attributes.name, "|", a.attributes.bundleId, "| id:", a.id);
+            }
+            console.log("APP_PERIOD_FOUND:", list.some((a) => a.attributes.bundleId === "com.period.app"));
+
+            const bids = await get("https://api.appstoreconnect.apple.com/v1/bundleIds?limit=200");
+            const bidList = (bids.body && bids.body.data) || [];
+            for (const b of bidList) {
+              console.log("BUNDLE_ID:", b.attributes.identifier, "|", b.attributes.name);
+            }
+            console.log("BUNDLE_PERIOD_FOUND:", bidList.some((b) => b.attributes.identifier === "com.period.app"));
+          })().catch((e) => { console.error("ERR", e.message); process.exit(1); });
+          '
