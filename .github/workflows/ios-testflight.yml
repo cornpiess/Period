@@ -8,6 +8,8 @@ on:
 
 jobs:
   testflight:
+    # A PWA-only merge must not build or upload a native application.
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[pwa-only]')
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4

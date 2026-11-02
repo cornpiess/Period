@@ -16,7 +16,7 @@ retain their existing interactions.
 - `node preview-server.cjs`, then `node test-v13-ui.cjs`: browser checks; requires
   Playwright and Chromium. Set `CHROME_PATH` for a custom browser executable.
 - `CHROME_PATH=/path/to/chrome node test-pwa.cjs`: existing recording/deletion
-  regression checks (the historical harness uses November 2026 dates).
+  regression checks (the harness fixes its calendar to November 2026).
 
 ### Model and limits
 

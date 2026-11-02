@@ -1,207 +1,107 @@
-// PWA patch pipeline — single entry point, keeps both shipped copies in sync.
-//
-//   1. restore pristine bundle + sw.js from Period-PWA.zip (the v1 backup)
-//   2. patch the bundle (currently: Home header logo 🌙 → app icon image)
-//   3. auto-bump the Service Worker CACHE_NAME (cache-first SW would
-//      otherwise serve the previous bundle forever)
-//   4. write results to BOTH tusi-web-dist/ (web preview) and assets/www/
-//      (what App.js bundles into the Expo shell)
-//   5. bump App.js PWA_ASSETS_VERSION so devices recopy on next launch
-//
-// Run: node patch-pwa.js   (idempotent against pristine sources)
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const { execFileSync } = require("child_process");
+// Rebuild the maintained calendar boundary in BOTH shipped PWA copies.
+// No untracked ZIP or extra runtime dependencies. Authored code lives in pwa/.
+// Re-running with unchanged inputs is a no-op, including asset/cache versions.
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const root = __dirname;
+const bundlePath = "assets/index-legacy-eCmZKwFb.js";
+const web = path.join(root, "tusi-web-dist");
+const native = path.join(root, "assets/www");
+let source = fs.readFileSync(path.join(web, bundlePath), "utf8");
+const original = source;
+const read = name => fs.readFileSync(path.join(root, "pwa", name), "utf8").trim();
 
-const ROOT = __dirname;
-const DIST = path.join(ROOT, "tusi-web-dist");
-const WWW = path.join(ROOT, "assets", "www");
-const BUNDLE_REL = path.join("assets", "index-legacy-eCmZKwFb.js");
-const ZIP = path.join(ROOT, "Period-PWA.zip");
-
-// ---------------------------------------------------------------------------
-// Step 1 — restore pristine bundle from the v1 backup
-// ---------------------------------------------------------------------------
-let pristineBundle, pristineSw;
-if (fs.existsSync(ZIP)) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "period-patch-"));
-  execFileSync("unzip", ["-q", "-o", ZIP, BUNDLE_REL, "sw.js", "-d", tmp], {stdio:"pipe"});
-  pristineBundle = fs.readFileSync(path.join(tmp, BUNDLE_REL), "utf8");
-  pristineSw = fs.readFileSync(path.join(tmp, "sw.js"), "utf8");
-  fs.rmSync(tmp, {recursive:true,force:true});
-} else {
-  pristineBundle = fs.readFileSync(path.join(DIST, BUNDLE_REL), "utf8");
-  pristineSw = fs.readFileSync(path.join(DIST, "sw.js"), "utf8");
+function replaceOnce(before, after) {
+  const count = source.split(before).length - 1;
+  if (count !== 1) throw new Error(`Patch anchor must match once (${count}): ${before.slice(0, 90)}`);
+  source = source.replace(before, () => after);
+}
+function section(name, content, install) {
+  const start = `/* period:${name}:start */`;
+  const end = `/* period:${name}:end */`;
+  const block = `${start}\n${content}\n${end}`;
+  const first = source.indexOf(start);
+  if (first !== -1) {
+    const last = source.indexOf(end, first);
+    if (last === -1) throw new Error(`Missing end marker: ${name}`);
+    source = source.slice(0, first) + block + source.slice(last + end.length);
+  } else install(block);
 }
 
-// ---------------------------------------------------------------------------
-// Step 2 — bundle patches. Anchors verified unique; replacements keep the
-// original code shape (no patchFlags in this build — full children diff).
-// ---------------------------------------------------------------------------
-let src = pristineBundle;
-function replaceOnce(anchor, replacement, label) {
-  if (src.includes(replacement)) return;
-  const count = src.split(anchor).length - 1;
-  if (count !== 1) {
-    console.error(`[FAIL] anchor "${label}" found ${count} times (expected 1)`);
-    process.exit(1);
+section("save", "function s(next=e.value){localStorage.setItem(Kl,JSON.stringify(next));e.value=next}",
+  block => replaceOnce("function s(){localStorage.setItem(Kl,JSON.stringify(e.value))}", block));
+section("actions", `const periodActions=(${read("period-actions.js")})(e,s,` +
+  "{parse:jl,format:Rl,add:Fl,isFuture:Ll});",
+  block => replaceOnce("dn(o,e=>{localStorage.setItem(Zl", block + "dn(o,e=>{localStorage.setItem(Zl"));
+const methods = ["previewPeriod", "previewPeriodUpdate", "addPeriod", "setPeriodStart", "setPeriodEnd", "removePeriod"];
+section("methods", methods.map(name => `${name}:periodActions.${name}`).join(","), block => {
+  const start = source.indexOf("addPeriod:function(t){");
+  const end = source.indexOf(",getDayRole:function(t)", start);
+  if (start === -1 || end === -1) throw new Error("Store methods boundary not found");
+  source = source.slice(0, start) + block + source.slice(end);
+});
+if (source.includes("o.valid?(e.value=o.periods,s(),")) {
+  replaceOnce("o.valid?(e.value=o.periods,s(),", "o.valid?(s(o.periods),");
+}
+
+const calendar = read("calendar.js").replace("__PERIOD_CALENDAR_CSS__", JSON.stringify(read("calendar.css")));
+section("calendar", `uc=${calendar}`, block => {
+  const start = source.indexOf('tc={class:"flex items-center justify-between mb-5"');
+  const end = source.indexOf(',dc={class:', start);
+  if (start === -1 || end === -1) throw new Error("Calendar component boundary not found");
+  source = source.slice(0, start) + block + source.slice(end);
+});
+
+// The calendar owns contextual guidance. The existing footer only shows
+// actual prediction results, never a second onboarding/status message.
+if (source.includes('St(t).isFirstTime?(br(),Ar("div",Tc')) {
+  const start = source.indexOf('St(t).isFirstTime?(br(),Ar("div",Tc');
+  const end = source.indexOf('St(t).prediction?(br(),Ar("div",jc', start);
+  if (end === -1) throw new Error("Home guidance boundary not found");
+  source = source.slice(0, start) + source.slice(end);
+}
+// Make the existing footer a compiler-compatible conditional block. Merely
+// adding a dynamic style to a hoisted node would leave it permanently hidden.
+const footerAnchor = 'Or("div",Pc,[Or("div",';
+if (source.includes(footerAnchor)) {
+  const start = source.indexOf(footerAnchor);
+  let depth = 0, quote = null, escaped = false, end = -1;
+  for (let index = start + 2; index < source.length; index++) {
+    const char = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") quote = char;
+    else if (char === "(") depth++;
+    else if (char === ")" && --depth === 0) { end = index + 1; break; }
   }
-  src = src.replace(anchor, replacement);
-  console.log(`[ok] ${label}`);
+  if (end < 0) throw new Error("Home footer boundary not found");
+  const footer = source.slice(start, end).replace('Or("div",Pc,', 'Ar("div",Pc,');
+  source = source.slice(0, start) + `St(t).prediction?(br(),${footer}):jr("",!0)` + source.slice(end);
 }
+source = require("./scripts/patch-v13.cjs")(source);
 
-// Home header logo: 🌙 emoji → real app icon (icon-192.png; already in SW
-// cache + Expo asset manifest; full-bleed gradient covers the old tile)
-const logoOld = '[Or("span",{class:"text-white text-sm","data-yyb-inspector-info":"src/views/Home.vue|11:13-11:55"},"🌙")]';
-const logoNew =
-  '[Or("img",{src:"./icon-192.png",alt:"Period",class:"w-9 h-9 rounded-xl object-cover",draggable:"false","data-yyb-inspector-info":"patch:app-icon"},null)]';
-replaceOnce(logoOld, logoNew, "Home header app-icon swap");
+// Parse the WHOLE generated artifact before touching either shipped copy.
+new vm.Script(source, { filename: bundlePath });
+const nativeBundle = fs.readFileSync(path.join(native, bundlePath), "utf8");
+const changed = source !== original || nativeBundle !== source;
+if (!changed) { console.log("PWA is current; no version changes."); process.exit(0); }
 
-// Day-cell style priority: selection ring must outrank the "today" style —
-// originally isToday won, so selecting today showed no ring at all.
-const styleOld =
-  'return e.isToday?"text-[#F26DAD] font-bold cursor-pointer":e.isFuture?"text-[#c7c7cc] cursor-default":c.value===e.dateStr?"text-[#F26DAD] font-semibold cursor-pointer rounded-xl ring-2 ring-[#F26DAD] ring-offset-1"';
-const styleNew =
-  'return c.value===e.dateStr?"text-[#F26DAD] font-semibold cursor-pointer rounded-xl ring-2 ring-[#F26DAD] ring-offset-1":e.isToday?"text-[#F26DAD] font-bold cursor-pointer":e.isFuture?"text-[#c7c7cc] cursor-default"';
-replaceOnce(styleOld, styleNew, "day-cell style: selection ring outranks today");
-
-// ---------------------------------------------------------------------------
-// Circular action button (between calendar and bottom card):
-//   date selected (ring)   → pink circle "+"  → addPeriod(that date)
-//   period segment selected → pink circle "×" → existing confirm modal
-//   nothing selected        → not rendered
-// Closure vars: t=store, c=selectedDate, l=selectedPeriodId, a=confirm modal.
-// ---------------------------------------------------------------------------
-const actionSetup = `
-function __doAdd() {
-  if (!c.value) return;
-  t.addPeriod(c.value);
-  c.value = null;
+const swPath = path.join(web, "sw.js");
+const appPath = path.join(root, "App.js");
+const sw = fs.readFileSync(swPath, "utf8");
+const app = fs.readFileSync(appPath, "utf8");
+if (!/period-pwa-v\d+/.test(sw) || !/PWA_ASSETS_VERSION = '\d+'/.test(app)) {
+  throw new Error("Cache/asset version markers not found");
 }
-function __doDel() {
-  if (!l.value) return;
-  const e = t.periods.find((e) => e.id === l.value);
-  if (e) a.value = { periodId: e.id, startDate: e.startDate, endDate: e.endDate };
-}
-`;
-const actionBtn = `
-c.value
-  ? (br(), Ar("button", {
-      key: "act-" + c.value,
-      class: "transition-all active:scale-95",
-      style: {
-        width: "48px", height: "48px", borderRadius: "50%",
-        background: "#F26DAD", border: "none", boxSizing: "border-box", padding: "0",
-        display: "flex", position: "relative",
-        marginLeft: "auto", marginRight: "auto",
-        marginTop: "12px", marginBottom: "6px",
-        boxShadow: "0 4px 12px rgba(242, 109, 173, 0.35)",
-      },
-      "aria-label": "记录经期",
-      onClick: __doAdd,
-    }, [
-      Or("span", { style: { position: "absolute", left: "50%", top: "50%", width: "20px", height: "2.5px", borderRadius: "2px", background: "rgba(255,255,255,0.95)", transform: "translate(-50%,-50%)" } }),
-      Or("span", { style: { position: "absolute", left: "50%", top: "50%", width: "2.5px", height: "20px", borderRadius: "2px", background: "rgba(255,255,255,0.95)", transform: "translate(-50%,-50%)" } }),
-    ]))
-  : l.value
-  ? (br(), Ar("button", {
-      key: "act-" + l.value,
-      class: "transition-all active:scale-95",
-      style: {
-        width: "48px", height: "48px", borderRadius: "50%",
-        background: "#FFFFFF", border: "2px solid #F26DAD", boxSizing: "border-box", padding: "0",
-        display: "flex", position: "relative",
-        marginLeft: "auto", marginRight: "auto",
-        marginTop: "12px", marginBottom: "6px",
-        boxShadow: "0 4px 12px rgba(242, 109, 173, 0.35)",
-      },
-      "aria-label": "删除选中的经期记录",
-      onClick: __doDel,
-    }, [
-      Or("span", { style: { position: "absolute", left: "50%", top: "50%", width: "20px", height: "2.5px", borderRadius: "2px", background: "#F26DAD", transform: "translate(-50%,-50%) rotate(45deg)" } }),
-      Or("span", { style: { position: "absolute", left: "50%", top: "50%", width: "20px", height: "2.5px", borderRadius: "2px", background: "#F26DAD", transform: "translate(-50%,-50%) rotate(-45deg)" } }),
-    ]))
-  : jr("", !0)
-`;
-
-// standalone syntax verification of both fragments with stub bindings
-function verifyFragment(code, statement) {
-  const stubs =
-    "var t={periods:[],getDayRole:function(){return{isPeriod:false}},addPeriod:function(){}}," +
-    "l={value:null},c={value:null},a={value:null}," +
-    "br=function(){},Ar=function(){},jr=function(){};";
-  const tmpFile = path.join(os.tmpdir(), "period-frag-check.js");
-  fs.writeFileSync(tmpFile, stubs + statement.replace("/*CODE*/", code));
-  try {
-    execFileSync(process.execPath, ["--check", tmpFile], { stdio: "pipe" });
-  } catch (e) {
-    console.error("[FAIL] fragment syntax:\n" + e.stderr.toString().split("\n")[0]);
-    process.exit(1);
-  }
-}
-verifyFragment(actionSetup, "/*CODE*/");
-verifyFragment(actionBtn, "var result = /*CODE*/;");
-console.log("[ok] fragments syntax-verified standalone");
-
-// per-line trim + join: authored fragments contain no line-spanning strings,
-// no // comments, and every line ends on a token that forbids ASI
-const minify = (code) => code.split("\n").map((l) => l.trim()).filter(Boolean).join("");
-
-if (!src.includes("function __doAdd()")) {
-const setupAnchor = 'return eo(()=>{t.load()}),(e,n)=>(br(),Ar("div",{class:"calendar-view';
-replaceOnce(setupAnchor, minify(actionSetup) + setupAnchor, "CalendarView action handlers");
-
-const btnAnchor = "预测经期</span></div></div>',1)),(br(),_r(An";
-replaceOnce(
-  btnAnchor,
-  "预测经期</span></div></div>',1))," + minify(actionBtn) + ",(br(),_r(An",
-  "circular action button vnode"
-);
-
-}
-src = require("./scripts/patch-v13.cjs")(src);
-
-// ---------------------------------------------------------------------------
-// Step 3 — bump SW cache version relative to the latest shipped one
-// ---------------------------------------------------------------------------
-function swNextVersion() {
-  let current = 1;
-  for (const p of [path.join(DIST, "sw.js"), path.join(WWW, "sw.js"), path.join(WWW, "sw.js.txt")]) {
-    const m = fs.existsSync(p) ? fs.readFileSync(p, "utf8").match(/period-pwa-v(\d+)/) : null;
-    if (m) current = Math.max(current, +m[1]);
-  }
-  return current + 1;
-}
-const swNext = swNextVersion();
-const patchedSw = pristineSw.replace(/period-pwa-v\d+/, `period-pwa-v${swNext}`);
-console.log(`[ok] sw cache bumped to period-pwa-v${swNext}`);
-
-// ---------------------------------------------------------------------------
-// Step 4 — write both shipped copies.
-// assets/www keeps sw.js as sw.js.txt (Metro asset convention, see App.js);
-// adapt to whichever name is present so we never resurrect a removed file.
-// ---------------------------------------------------------------------------
-const wwwSwPath = fs.existsSync(path.join(WWW, "sw.js.txt"))
-  ? path.join(WWW, "sw.js.txt")
-  : path.join(WWW, "sw.js");
-for (const dir of [DIST, WWW]) {
-  fs.writeFileSync(path.join(dir, BUNDLE_REL), src, "utf8");
-  fs.writeFileSync(dir === WWW ? wwwSwPath : path.join(dir, "sw.js"), patchedSw, "utf8");
-  console.log(`[ok] written ${path.relative(ROOT, dir)}`);
-}
-
-// ---------------------------------------------------------------------------
-// Step 5 — bump App.js asset version so the Expo shell recopies on device
-// ---------------------------------------------------------------------------
-const appJsPath = path.join(ROOT, "App.js");
-const appJs = fs.readFileSync(appJsPath, "utf8");
-const m = appJs.match(/const PWA_ASSETS_VERSION = '(\d+)';/);
-if (!m) {
-  console.error("[FAIL] PWA_ASSETS_VERSION not found in App.js");
-  process.exit(1);
-}
-fs.writeFileSync(appJsPath, appJs.replace(m[0], `const PWA_ASSETS_VERSION = '${+m[1] + 1}';`));
-console.log(`[ok] App.js PWA_ASSETS_VERSION bumped to ${+m[1] + 1}`);
-
-console.log(`done: bundle ${src.length} bytes, sw v${swNext}`);
+const swNext = sw.replace(/period-pwa-v(\d+)/, (_, version) => `period-pwa-v${Number(version) + 1}`);
+const appNext = app.replace(/PWA_ASSETS_VERSION = '(\d+)'/, (_, version) => `PWA_ASSETS_VERSION = '${Number(version) + 1}'`);
+for (const directory of [web, native]) fs.writeFileSync(path.join(directory, bundlePath), source);
+fs.writeFileSync(swPath, swNext);
+fs.writeFileSync(path.join(native, "sw.js.txt"), swNext);
+fs.writeFileSync(appPath, appNext);
+console.log("Rebuilt calendar + store; web/native artifacts synchronized; cache and assets versioned.");
