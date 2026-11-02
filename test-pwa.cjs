@@ -74,7 +74,7 @@ async function screenshot(page, name) {
     await delay(100);
   }
   browser = await playwright.chromium.launch({ headless: true,
-    executablePath: process.env.CHROME_PATH || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    executablePath: process.env.CHROME_PATH || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage", ...(process.platform === "linux" ? ["--no-zygote", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--in-process-gpu"] : [])] });
   let page = await fresh();
   await check("empty state has one contextual hint and no action button", async () => {
     assert.equal(await hint(page), "点选经期开始那天");

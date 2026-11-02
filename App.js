@@ -23,7 +23,7 @@ const WWW_DIR = `${FileSystem.documentDirectory}period-www/`;
 const VERSION_FILE = `${WWW_DIR}.pwa-version`;
 
 // 资产版本标记：assets/www 内容变更时必须递增，启动时据此跳过整目录重拷
-const PWA_ASSETS_VERSION = '11';
+const PWA_ASSETS_VERSION = '12';
 
 export default function App() {
   const [ready, setReady] = useState(false);

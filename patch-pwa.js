@@ -83,6 +83,8 @@ if (source.includes(footerAnchor)) {
   const footer = source.slice(start, end).replace('Or("div",Pc,', 'Ar("div",Pc,');
   source = source.slice(0, start) + `St(t).prediction?(br(),${footer}):jr("",!0)` + source.slice(end);
 }
+source = require("./scripts/patch-v13.cjs")(source);
+
 // Parse the WHOLE generated artifact before touching either shipped copy.
 new vm.Script(source, { filename: bundlePath });
 const nativeBundle = fs.readFileSync(path.join(native, bundlePath), "utf8");

@@ -1,5 +1,5 @@
 /* Period PWA Service Worker */
-const CACHE_NAME = "period-pwa-v12";
+const CACHE_NAME = "period-pwa-v13";
 
 const CORE_ASSETS = [
   "./",
