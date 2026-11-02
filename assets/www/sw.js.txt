@@ -1,10 +1,10 @@
 /* Period PWA Service Worker */
-const CACHE_NAME = "period-pwa-v13";
+const CACHE_NAME = "period-pwa-v14";
 
 const CORE_ASSETS = [
   "./",
   "./index.html",
-  "./assets/index-legacy-eCmZKwFb.js",
+  "./assets/index-legacy-eCmZKwFb.js?v=2b82dee44a11",
   "./assets/polyfills-legacy-DI84a8Gu.js",
   "./favicon.png",
   "./icon-192.png",

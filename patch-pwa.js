@@ -88,7 +88,12 @@ source = require("./scripts/patch-v13.cjs")(source);
 // Parse the WHOLE generated artifact before touching either shipped copy.
 new vm.Script(source, { filename: bundlePath });
 const nativeBundle = fs.readFileSync(path.join(native, bundlePath), "utf8");
-const changed = source !== original || nativeBundle !== source;
+const crypto = require("node:crypto");
+const assetTag = crypto.createHash("sha256").update(source).digest("hex").slice(0, 12);
+const indexPath = path.join(web, "index.html");
+const indexOriginal = fs.readFileSync(indexPath, "utf8");
+const indexNext = indexOriginal.replace(/(data-src="\.\/assets\/index-legacy-eCmZKwFb\.js)(?:\?v=[^"]*)?"/, '$1?v=' + assetTag + '"');
+const changed = source !== original || nativeBundle !== source || indexNext !== indexOriginal;
 if (!changed) { console.log("PWA is current; no version changes."); process.exit(0); }
 
 const swPath = path.join(web, "sw.js");
@@ -98,9 +103,12 @@ const app = fs.readFileSync(appPath, "utf8");
 if (!/period-pwa-v\d+/.test(sw) || !/PWA_ASSETS_VERSION = '\d+'/.test(app)) {
   throw new Error("Cache/asset version markers not found");
 }
-const swNext = sw.replace(/period-pwa-v(\d+)/, (_, version) => `period-pwa-v${Number(version) + 1}`);
+const swNext = sw.replace(/period-pwa-v(\d+)/, (_, version) => `period-pwa-v${Number(version) + 1}`).replace(/"\.\/assets\/index-legacy-eCmZKwFb\.js(?:\?v=[^"]*)?"/, '"./assets/index-legacy-eCmZKwFb.js?v=' + assetTag + '"');
 const appNext = app.replace(/PWA_ASSETS_VERSION = '(\d+)'/, (_, version) => `PWA_ASSETS_VERSION = '${Number(version) + 1}'`);
-for (const directory of [web, native]) fs.writeFileSync(path.join(directory, bundlePath), source);
+for (const directory of [web, native]) {
+  fs.writeFileSync(path.join(directory, bundlePath), source);
+  fs.writeFileSync(path.join(directory, "index.html"), indexNext);
+}
 fs.writeFileSync(swPath, swNext);
 fs.writeFileSync(path.join(native, "sw.js.txt"), swNext);
 fs.writeFileSync(appPath, appNext);

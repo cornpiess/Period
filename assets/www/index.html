@@ -22,7 +22,17 @@
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {
-          navigator.serviceWorker.register("./sw.js").catch(function () {});
+          var hadController = !!navigator.serviceWorker.controller;
+          var refreshing = false;
+          navigator.serviceWorker.addEventListener("controllerchange", function () {
+            if (hadController && !refreshing) { refreshing = true; location.reload(); }
+          });
+          navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then(function (registration) {
+            registration.update().catch(function () {});
+            document.addEventListener("visibilitychange", function () {
+              if (!document.hidden) registration.update().catch(function () {});
+            });
+          }).catch(function () {});
         });
       }
     </script>
@@ -30,6 +40,6 @@
   <body data-page-node-id="cja15M0B5Cdaaqu4EozJ2Q">
     <div id="app" data-page-node-id="upDTZyC7VJk5HenpFr5rR2"></div>
     <script id="vite-legacy-polyfill" src="./assets/polyfills-legacy-DI84a8Gu.js"></script>
-    <script id="vite-legacy-entry" data-src="./assets/index-legacy-eCmZKwFb.js">System.import(document.getElementById('vite-legacy-entry').getAttribute('data-src'))</script>
+    <script id="vite-legacy-entry" data-src="./assets/index-legacy-eCmZKwFb.js?v=2b82dee44a11">System.import(document.getElementById('vite-legacy-entry').getAttribute('data-src'))</script>
   </body>
 </html>
