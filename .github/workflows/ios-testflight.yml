@@ -1,4 +1,5 @@
 name: iOS Build to TestFlight
+# Native releases build the lightweight Swift shell.
 on:
   push:
     branches: [main]
