@@ -9,8 +9,12 @@ BUILD_TOOLS=$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sor
 APK=android-lite/android/app/build/outputs/apk/release/app-release.apk
 
 verify_cert() {
-    local file="$1" actual
-    actual=$("$BUILD_TOOLS/apksigner" verify --print-certs "$file" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+    local file="$1" actual report
+    report=$("$BUILD_TOOLS/apksigner" verify --print-certs "$file")
+    printf '%s\n' "$report"
+    # New build-tools versions may include SDK bounds before the signer number.
+    # Check every unique signer certificate; never accept a missing digest.
+    actual=$(printf '%s\n' "$report" | sed -nE 's/^Signer.*certificate SHA-256 digest: ([0-9a-fA-F]+).*$/\1/p' | tr 'A-F' 'a-f' | sort -u)
     test "$actual" = "$EXPECTED_CERT" || { echo "Signing identity mismatch: $file" >&2; exit 1; }
     echo "Verified original signing identity: $actual"
 }
