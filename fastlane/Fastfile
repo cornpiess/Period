@@ -24,7 +24,7 @@ platform :ios do
     export_auth_args = "-allowProvisioningUpdates"
 
     build_app(
-      workspace: "ios/Period.xcworkspace",
+      project: "ios-lite/Period.xcodeproj",
       scheme: "Period",
       configuration: "Release",
       export_method: "app-store",
