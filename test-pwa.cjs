@@ -1,194 +1,267 @@
-// Interactive regression test via Chrome DevTools Protocol (zero deps).
-// Validates the ORIGINAL interaction model:
-//   record = click day to select (ring) → click same day again / double-click / long-press
-//   delete = click a period day → × badge at range midpoint → confirm modal
-const { spawn } = require("child_process");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-
-const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const PORT = 9333;
-const APP = "http://127.0.0.1:8888/#/";
-
-// fresh profile per run: a persisted one would let the previous run's
-// Service Worker serve its cached bundle on first navigation
-const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), "period-test-"));
-
-const chrome = spawn(CHROME, [
-  "--headless=new", "--disable-gpu", "--no-first-run",
-  `--remote-debugging-port=${PORT}`,
-  "--user-data-dir=" + PROFILE,
-  "about:blank",
-], { stdio: "ignore" });
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function getTargetWs() {
-  for (let i = 0; i < 30; i++) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${PORT}/json/list`);
-      const list = await res.json();
-      const page = list.find((t) => t.type === "page");
-      if (page) return page.webSocketDebuggerUrl;
-    } catch {}
-    await sleep(300);
-  }
-  throw new Error("chrome devtools endpoint never came up");
+// Real-browser regression tests. Start the preview server in this process tree.
+// Prerequisite: npm install --no-save playwright && npx playwright install chromium
+// Optional: CHROME_PATH=/path/to/chrome, TEST_SCREENSHOTS=/path/to/screenshots
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+let playwright;
+try { playwright = require("playwright"); }
+catch (failure) {
+  if (!process.env.CODEX_PRIMARY_RUNTIME_NODE_MODULES) throw failure;
+  playwright = require(path.join(process.env.CODEX_PRIMARY_RUNTIME_NODE_MODULES, "playwright"));
 }
-
-function cdp(wsUrl) {
-  const ws = new WebSocket(wsUrl);
-  let id = 0;
-  const pending = new Map();
-  const events = [];
-  ws.addEventListener("message", (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.id && pending.has(msg.id)) {
-      pending.get(msg.id)(msg);
-      pending.delete(msg.id);
-    } else if (msg.method) events.push(msg);
-  });
-  const send = (method, params = {}) =>
-    new Promise((resolve) => {
-      const mid = ++id;
-      pending.set(mid, resolve);
-      ws.send(JSON.stringify({ id: mid, method, params }));
-    });
-  const awaitEvent = (method, timeout = 15000) =>
-    new Promise((resolve, reject) => {
-      const t0 = Date.now();
-      const poll = setInterval(() => {
-        const idx = events.findIndex((e) => e.method === method);
-        if (idx >= 0) { clearInterval(poll); resolve(events.splice(idx, 1)[0]); }
-        else if (Date.now() - t0 > timeout) { clearInterval(poll); reject(new Error("timeout " + method)); }
-      }, 50);
-    });
-  const ready = new Promise((res) => ws.addEventListener("open", res));
-  return { ws, send, awaitEvent, ready };
+const url = "http://127.0.0.1:8888";
+const key = "period-tracker-v4";
+const checks = [];
+const server = spawn(process.execPath, [path.join(__dirname, "preview-server.cjs")], { stdio: "ignore" });
+let browser;
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+async function check(name, task) { await task(); checks.push(name); console.log("PASS", name); }
+async function records(page) { return page.evaluate(key => JSON.parse(localStorage.getItem(key) || "[]"), key); }
+async function writes(page) { return page.evaluate(() => window.__periodWrites); }
+async function hint(page) { return page.locator("#period-context-hint").innerText(); }
+function day(page, value) { return page.locator(`[data-date="${value}"]`); }
+async function fresh(seed = [], viewport = { width: 390, height: 844 }, touch = false) {
+  const page = await browser.newPage({ viewport, hasTouch: touch, isMobile: touch });
+  page.setDefaultTimeout(5000);
+  page.__errors = [];
+  page.on("pageerror", error => page.__errors.push(error.message));
+  page.on("console", message => { if (message.type() === "error") page.__errors.push(message.text()); });
+  // Exercise the offline font fallback; no external requests needed by a test.
+  await page.route("https://fonts.googleapis.com/**", route => route.fulfill({ body: "" }));
+  await page.addInitScript(({ seed, key }) => {
+    const OriginalDate = Date;
+    window.Date = class extends OriginalDate {
+      constructor(...args) { super(...(args.length ? args : [2026, 10, 15, 12])); }
+      static now() { return OriginalDate.now(); }
+    };
+    const original = Storage.prototype.setItem;
+    if (!localStorage.getItem(key)) original.call(localStorage, key, JSON.stringify(seed));
+    window.__periodWrites = 0;
+    Storage.prototype.setItem = function(name, value) {
+      if (name === key) window.__periodWrites++;
+      return original.call(this, name, value);
+    };
+  }, { seed, key });
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".period-days");
+  return page;
 }
-
-async function evalJs(conn, expr) {
-  const r = await conn.send("Runtime.evaluate", {
-    expression: expr, awaitPromise: true, returnByValue: true,
-  });
-  if (r.result && r.result.exceptionDetails) {
-    throw new Error("page eval failed: " + JSON.stringify(r.result.exceptionDetails).slice(0, 400));
-  }
-  return r.result ? r.result.result.value : undefined;
+async function point(locator) {
+  const rect = await locator.boundingBox();
+  assert(rect); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 }
-
-const results = [];
-const check = (name, cond, extra = "") => {
-  results.push({ name, pass: !!cond, extra });
-  console.log(`${cond ? "PASS" : "FAIL"}  ${name}${extra ? "  — " + extra : ""}`);
-};
+async function drag(page, from, to, cancel = false) {
+  const start = await point(day(page, from)), end = await point(day(page, to));
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.waitForFunction(() => document.querySelector("#period-context-hint").textContent.includes("·"));
+  const during = { records: await records(page), writes: await writes(page), hint: await hint(page) };
+  if (cancel) await page.locator(".period-calendar").dispatchEvent("pointercancel", { pointerId: 1, isPrimary: true });
+  await page.mouse.up(); await delay(550);
+  return during;
+}
+async function screenshot(page, name) {
+  if (!process.env.TEST_SCREENSHOTS) return;
+  fs.mkdirSync(process.env.TEST_SCREENSHOTS, { recursive: true });
+  await page.screenshot({ path: path.join(process.env.TEST_SCREENSHOTS, name + ".png"), fullPage: true });
+}
 
 (async () => {
-  const wsUrl = await getTargetWs();
-  const conn = cdp(wsUrl);
-  await conn.ready;
-  await conn.send("Page.enable");
-  await conn.send("Runtime.enable");
-  const loaded = conn.awaitEvent("Page.loadEventFired");
-  await conn.send("Page.navigate", { url: APP });
-  await loaded;
-  await sleep(2500); // let SystemJS legacy bootstrapping finish
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try { if ((await fetch(url)).ok) break; } catch (failure) { if (attempt === 29) throw failure; }
+    await delay(100);
+  }
+  browser = await playwright.chromium.launch({ headless: true,
+    executablePath: process.env.CHROME_PATH || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  let page = await fresh();
+  await check("empty state has one contextual hint and no action button", async () => {
+    assert.equal(await hint(page), "点选经期开始那天");
+    assert.equal(await page.locator(".period-action").count(), 0);
+    assert(!(await page.locator("body").innerText()).includes("长按和双击"));
+    await screenshot(page, "empty");
+  });
+  await check("selecting a date previews exactly 7 days without saving", async () => {
+    await day(page, "2026-11-02").click();
+    assert.equal(await page.locator(".is-preview").count(), 7);
+    assert.equal(await page.locator(".is-date-selected").count(), 1);
+    assert.match(await hint(page), /默认 7 天/);
+    assert.equal(await writes(page), 0); assert.deepEqual(await records(page), []);
+    await screenshot(page, "preview");
+  });
+  await check("changing month cancels the preview without saving", async () => {
+    await page.getByRole("button", { name: "上一月", exact: true }).click();
+    assert.equal(await page.locator(".is-preview").count(), 0); assert.equal(await writes(page), 0);
+    await page.getByRole("button", { name: "下一月", exact: true }).click();
+  });
+  await check("plus commits the preview once and needs no end confirmation", async () => {
+    await day(page, "2026-11-02").click();
+    await page.getByRole("button", { name: "记录开始", exact: true }).click();
+    const data = await records(page);
+    assert.equal(data.length, 1); assert.equal(data[0].startDate, "2026-11-02");
+    assert.equal(data[0].endDate, "2026-11-08"); assert.equal(await writes(page), 1);
+    assert.equal(await hint(page), "已记录，无需再记录结束");
+    assert.equal(await page.locator(".period-action").count(), 0);
+    await screenshot(page, "saved");
+  });
+  await check("reload retains the record", async () => {
+    await page.reload(); await page.waitForSelector(".period-days");
+    assert.equal((await records(page)).length, 1); assert.equal(await page.locator(".is-period").count(), 7);
+  });
+  await check("selecting a period reveals 2 handles and exactly one delete entry", async () => {
+    await day(page, "2026-11-04").click();
+    assert.equal(await page.locator(".period-range-handle").count(), 2);
+    assert.equal(await page.getByRole("button", { name: "删除选中的经期记录" }).count(), 1);
+    assert.equal(await page.locator(".period-day").filter({ hasText: "×" }).count(), 0);
+    await screenshot(page, "selected");
+  });
+  await check("drag previews only, then saves exactly once on release", async () => {
+    const during = await drag(page, "2026-11-08", "2026-11-07");
+    assert.equal(during.records[0].endDate, "2026-11-08"); assert.equal(during.writes, 0);
+    assert.match(during.hint, /6天/); assert.equal((await records(page))[0].endDate, "2026-11-07");
+    assert.equal(await writes(page), 1);
+  });
+  await check("cancelling drag leaves stored dates and write count unchanged", async () => {
+    const before = await records(page), count = await writes(page);
+    await drag(page, "2026-11-07", "2026-11-06", true);
+    assert.deepEqual(await records(page), before); assert.equal(await writes(page), count);
+  });
+  await check("keyboard can adjust an endpoint", async () => {
+    await day(page, "2026-11-07").focus(); await page.keyboard.press("ArrowLeft");
+    assert.equal((await records(page))[0].endDate, "2026-11-06");
+  });
+  await check("cancel delete preserves record and returns focus", async () => {
+    await page.getByRole("button", { name: "删除选中的经期记录" }).click();
+    assert.equal(await page.getByRole("dialog").count(), 1);
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    assert.equal((await records(page)).length, 1);
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute("aria-label")), "删除选中的经期记录");
+  });
+  await check("confirm delete removes whole period and returns to empty state", async () => {
+    await page.getByRole("button", { name: "删除选中的经期记录" }).click();
+    await page.getByRole("button", { name: "确认删除", exact: true }).click();
+    assert.deepEqual(await records(page), []); assert.equal(await hint(page), "点选经期开始那天");
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
 
-  // ---- 1. mount + icon + action bar fully removed
-  check("app mounted", await evalJs(conn, `document.querySelector('#app')?.innerHTML.length > 100`));
-  check("header shows app icon img (loaded)", await evalJs(conn,
-    `(function(){const img=document.querySelector('header img[src*="icon-192"]');return !!img && img.naturalWidth > 0})()`));
-  check("no record/delete action buttons", await evalJs(conn,
-    `![...document.querySelectorAll('button')].some(b => ['记录今日经期','删除该段经期'].includes(b.textContent.trim()) || ['记录经期','删除选中的经期记录','取消选择'].includes(b.getAttribute('aria-label')))`));
-  check("original onboarding tip restored", await evalJs(conn,
-    `document.body.textContent.includes('点击选中空白日期再点击即可记录经期')`));
+  page = await fresh();
+  await check("real double-click creates one record without duplicate selection", async () => {
+    await day(page, "2026-11-02").dblclick();
+    assert.equal((await records(page)).length, 1); assert.equal(await writes(page), 1);
+    assert.equal(await page.locator(".period-action").count(), 0);
+  });
+  await check("long press creates one record and suppresses its synthetic click", async () => {
+    const position = await point(day(page, "2026-11-12"));
+    await page.mouse.move(position.x, position.y); await page.mouse.down(); await delay(700); await page.mouse.up();
+    assert.equal((await records(page)).length, 2); assert.equal(await writes(page), 2);
+    assert.equal(await page.locator(".period-action").count(), 0);
+    assert((await page.locator("body").innerText()).includes("预测下次经期"));
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
 
-  // ---- 2. circular "+": click date → button appears → click + → records
-  check("idle: no action button", await evalJs(conn,
-    `![...document.querySelectorAll('button')].some(b => ['记录经期','删除选中的经期记录'].includes(b.getAttribute('aria-label')))`));
-  check("click TODAY 11-02", await evalJs(conn,
-    `(function(){document.querySelector('button[data-date="2026-11-02"]').click();return true})()`));
-  await sleep(200);
-  check("today cell shows selection ring (fix verified)", await evalJs(conn,
-    `document.querySelector('button[data-date="2026-11-02"]').className.includes('ring-2')`));
-  check("click 11-01 moves selection there", await evalJs(conn,
-    `(function(){document.querySelector('button[data-date="2026-11-01"]').click();return true})()`));
-  await sleep(200);
-  check("ring selection visible", await evalJs(conn,
-    `document.querySelector('button[data-date="2026-11-01"]').className.includes('ring-2')`));
-  check("circular + button appears (48x48, two bars)", await evalJs(conn,
-    `(function(){const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='记录经期');
-      if(!b)return false;
-      const bars=b.querySelectorAll('span');
-      return b.offsetWidth===48 && b.offsetHeight===48 && bars.length===2 &&
-        [...bars].some(s=>s.offsetWidth===20 && s.offsetHeight<=3) &&
-        [...bars].some(s=>s.offsetWidth<=3 && s.offsetHeight===20) &&
-        getComputedStyle(b).borderRadius!=='0px'})()`));
-  check("click + records period", await evalJs(conn,
-    `(function(){const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='记录经期');if(!b)return false;b.click();return true})()`));
-  await sleep(300);
-  const store1 = await evalJs(conn, `JSON.parse(localStorage.getItem('period-tracker-v4') || '[]')`);
-  check("period persisted (11-01..11-07)", store1.length === 1 && store1[0].startDate === "2026-11-01" && store1[0].endDate === "2026-11-07",
-    JSON.stringify(store1));
-  check("+ button gone after add", await evalJs(conn,
-    `![...document.querySelectorAll('button')].some(b => b.getAttribute('aria-label')==='记录经期')`));
+  page = await fresh([{ id: "existing", startDate: "2026-11-08", endDate: "2026-11-14" }]);
+  await check("overlap is blocked even when only the proposed end overlaps", async () => {
+    await day(page, "2026-11-04").click();
+    assert.equal(await page.getByRole("button", { name: "记录开始", exact: true }).isDisabled(), true);
+    assert.match(await hint(page), /重叠/); assert.equal(await writes(page), 0);
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
 
-  // ---- 3. circular "×": click period day → × appears → confirm modal flow
-  check("click period day 11-03", await evalJs(conn,
-    `(function(){document.querySelector('button[data-date="2026-11-03"]').click();return true})()`));
-  await sleep(300);
-  check("circular × button appears (white fill, pink outline, pink bars)", await evalJs(conn,
-    `(function(){const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='删除选中的经期记录');
-      if(!b)return false;
-      const bars=b.querySelectorAll('span');
-      const cs=getComputedStyle(b);
-      return b.offsetWidth===48 && b.offsetHeight===48 && bars.length===2 &&
-        [...bars].every(s=>s.offsetWidth===20 && getComputedStyle(s).backgroundColor==='rgb(242, 109, 173)') &&
-        [...bars].some(s=>s.style.transform.includes('rotate(45deg)')) &&
-        [...bars].some(s=>s.style.transform.includes('rotate(-45deg)')) &&
-        cs.backgroundColor==='rgb(255, 255, 255)' &&
-        cs.borderColor==='rgb(242, 109, 173)'})()`));
-  check("click × opens confirm modal", await evalJs(conn,
-    `(function(){const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='删除选中的经期记录');if(!b)return false;b.click();return true})()`));
-  await sleep(300);
-  check("modal visible", await evalJs(conn, `document.body.textContent.includes('删除经期记录')`));
-  check("cancel modal keeps selection (× stays)", await evalJs(conn,
-    `(function(){const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='取消');b.click();return true})()`));
-  await sleep(300);
-  check("× still visible after cancel", await evalJs(conn,
-    `!![...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label')==='删除选中的经期记录')`));
-  check("click × again and confirm delete", await evalJs(conn,
-    `(function(){[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='删除选中的经期记录').click();return true})()`));
-  await sleep(300);
-  check("click 确认删除", await evalJs(conn,
-    `(function(){const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='确认删除');if(!b)return false;b.click();return true})()`));
-  await sleep(300);
-  const store2 = await evalJs(conn, `JSON.parse(localStorage.getItem('period-tracker-v4') || '[]')`);
-  check("period removed", store2.length === 0);
-  check("× button gone after delete", await evalJs(conn,
-    `![...document.querySelectorAll('button')].some(b => b.getAttribute('aria-label')==='删除选中的经期记录')`));
+  page = await fresh();
+  await check("failed persistence never turns preview into a saved record", async () => {
+    await day(page, "2026-11-02").click();
+    await page.evaluate(() => { const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(name, value) { if (name === "period-tracker-v4") throw new Error("QuotaExceededError");
+        return original.call(this, name, value); }; });
+    await page.getByRole("button", { name: "记录开始", exact: true }).click();
+    assert.deepEqual(await records(page), []); assert.equal(await page.locator(".is-period").count(), 0);
+    assert.equal(await page.locator(".is-preview").count(), 7); assert.match(await hint(page), /保存失败/);
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
 
-  // ---- 4. legacy gestures still work and also dismiss the +
-  check("dblclick 11-01 records (legacy path)", await evalJs(conn,
-    `(function(){const el=document.querySelector('button[data-date="2026-11-01"]');el.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return true})()`));
-  await sleep(300);
-  const store3 = await evalJs(conn, `JSON.parse(localStorage.getItem('period-tracker-v4') || '[]')`);
-  check("dblclick created period", store3.length === 1 && store3[0].startDate === "2026-11-01");
-  // November has no free past day left (11-01 covered); go back one month
-  check("navigate to previous month", await evalJs(conn,
-    `(function(){document.querySelector('button[aria-label="上一月"]').click();return true})()`));
-  await sleep(300);
-  check("click-click 10-15 records (legacy path, dismisses +)", await evalJs(conn,
-    `(function(){const el=document.querySelector('button[data-date="2026-10-15"]');el.click();el.click();return true})()`));
-  await sleep(300);
-  const store4 = await evalJs(conn, `JSON.parse(localStorage.getItem('period-tracker-v4') || '[]')`);
-  check("click-click created period 10-15", store4.length === 2 && store4.some(p => p.startDate === "2026-10-15"));
-  check("no + button left", await evalJs(conn,
-    `![...document.querySelectorAll('button')].some(b => b.getAttribute('aria-label')==='记录经期')`));
+  page = await fresh([{ id: "existing", startDate: "2026-11-02", endDate: "2026-11-08" }]);
+  await check("failed drag persistence restores the original visible range", async () => {
+    await day(page, "2026-11-04").click();
+    await page.evaluate(() => { const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(name, value) { if (name === "period-tracker-v4") throw new Error("QuotaExceededError");
+        return original.call(this, name, value); }; });
+    await drag(page, "2026-11-08", "2026-11-07");
+    assert.equal((await records(page))[0].endDate, "2026-11-08");
+    assert.equal(await page.locator(".is-period").count(), 7); assert.match(await hint(page), /恢复原日期/);
+  });
+  await check("failed deletion leaves the original record visible", async () => {
+    await page.getByRole("button", { name: "删除选中的经期记录" }).click();
+    await page.getByRole("button", { name: "确认删除", exact: true }).click();
+    assert.equal((await records(page)).length, 1); assert.equal(await page.locator(".is-period").count(), 7);
+    assert.match(await hint(page), /记录仍保留/);
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
 
-  const fails = results.filter((r) => !r.pass);
-  console.log(`\n${results.length - fails.length}/${results.length} passed`);
-  chrome.kill();
-  process.exit(fails.length ? 1 : 0);
-})().catch((e) => { console.error("HARNESS ERROR:", e.message); chrome.kill(); process.exit(2); });
+  page = await fresh([{ id: "single", startDate: "2026-11-02", endDate: "2026-11-02" }]);
+  await check("a one-day period can be extended by dragging toward a later date", async () => {
+    await day(page, "2026-11-02").click(); await drag(page, "2026-11-02", "2026-11-04");
+    assert.equal((await records(page))[0].endDate, "2026-11-04"); assert.equal(await writes(page), 1);
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
+
+  page = await fresh([], { width: 390, height: 844 }, true);
+  await check("touch dragging previews and commits once", async () => {
+    await day(page, "2026-11-02").tap();
+    await page.getByRole("button", { name: "记录开始", exact: true }).tap();
+    await day(page, "2026-11-04").tap();
+    const session = await page.context().newCDPSession(page);
+    const start = await point(day(page, "2026-11-08")), end = await point(day(page, "2026-11-07"));
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [start] });
+    for (let step = 1; step <= 5; step++) await session.send("Input.dispatchTouchEvent", {
+      type: "touchMove", touchPoints: [{ x: start.x + (end.x - start.x) * step / 5,
+        y: start.y + (end.y - start.y) * step / 5 }],
+    });
+    await page.waitForFunction(() => document.querySelector("#period-context-hint").textContent.includes("6天"));
+    assert.equal((await records(page))[0].endDate, "2026-11-08"); assert.equal(await writes(page), 1);
+    assert.match(await hint(page), /6天/);
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForFunction(() => !document.querySelector("#period-context-hint").textContent.includes("·"));
+    assert.equal((await records(page))[0].endDate, "2026-11-07"); assert.equal(await writes(page), 2);
+    await session.detach();
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
+
+  page = await fresh([], { width: 320, height: 568 }, true);
+  await check("touch can select and record on a 320px screen without overflow", async () => {
+    await day(page, "2026-11-15").tap();
+    assert.equal(await page.locator(".is-preview").count(), 7);
+    const action = await page.locator(".period-action").boundingBox();
+    assert(action.y + action.height <= 568, "record action must be visible without scrolling");
+    await screenshot(page, "touch-320-preview");
+    await page.getByRole("button", { name: "记录开始", exact: true }).tap();
+    assert.equal((await records(page))[0].startDate, "2026-11-15");
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await screenshot(page, "touch-320");
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
+
+  page = await fresh([], { width: 1024, height: 768 });
+  await check("cross-month preview uses actual dates, still exactly 7 days", async () => {
+    await page.getByRole("button", { name: "上一月", exact: true }).click();
+    await day(page, "2026-10-30").click();
+    assert.equal(await page.locator(".is-preview").count(), 7);
+    await screenshot(page, "cross-month-desktop");
+    await page.getByRole("button", { name: "记录开始", exact: true }).click();
+    assert.equal((await records(page))[0].endDate, "2026-11-05");
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
+
+  page = await fresh([{ id: "cross-month", startDate: "2026-10-30", endDate: "2026-11-05" }]);
+  await check("a visible endpoint can be dragged across the month boundary", async () => {
+    await page.getByRole("button", { name: "上一月", exact: true }).click();
+    await day(page, "2026-10-30").click();
+    await drag(page, "2026-10-30", "2026-11-01");
+    assert.equal((await records(page))[0].startDate, "2026-11-01"); assert.equal(await writes(page), 1);
+  });
+  assert.deepEqual(page.__errors, []); await page.close();
+  console.log(`\n${checks.length}/${checks.length} browser scenarios passed.`);
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+  if (browser) await browser.close(); server.kill();
+});
