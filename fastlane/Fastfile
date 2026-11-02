@@ -20,6 +20,8 @@ platform :ios do
                 "-authenticationKeyPath #{key_path} " \
                 "-authenticationKeyID #{ENV['ASC_KEY_ID']} " \
                 "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}"
+    # 导出阶段 fastlane 会自动附加 API key 参数，手动再传会重复报错
+    export_auth_args = "-allowProvisioningUpdates"
 
     build_app(
       workspace: "ios/Period.xcworkspace",
@@ -27,7 +29,7 @@ platform :ios do
       configuration: "Release",
       export_method: "app-store",
       xcargs: "DEVELOPMENT_TEAM=#{ENV["TEAM_ID"]} CODE_SIGN_STYLE=Automatic #{auth_args}",
-      export_xcargs: auth_args
+      export_xcargs: export_auth_args
     )
 
     upload_to_testflight(
