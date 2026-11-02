@@ -22,7 +22,7 @@ platform :ios do
                 "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}"
 
     build_app(
-      project: "ios/Period.xcodeproj",
+      workspace: "ios/Period.xcworkspace",
       scheme: "Period",
       configuration: "Release",
       export_method: "app-store",

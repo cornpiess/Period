@@ -3,6 +3,7 @@ name: iOS Build to TestFlight
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'LICENSE']
   workflow_dispatch:
 
 jobs:
@@ -22,12 +23,16 @@ jobs:
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --no-install
 
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install CocoaPods dependencies
         run: cd ios && pod install
 
-      - name: Install Fastlane
-        run: gem install fastlane --no-document
-
+      # fastlane 预装在 GitHub macOS runner 镜像中，无需 gem install
       - name: Build and upload to TestFlight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
