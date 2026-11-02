@@ -1,47 +1,23 @@
 name: iOS Build to TestFlight
-
 on:
   push:
     branches: [main]
     paths-ignore: ['**.md', 'LICENSE']
   workflow_dispatch:
-
 jobs:
   testflight:
-    # A PWA-only merge must not build or upload a native application.
     if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[pwa-only]')
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
-
-      - name: Select newest Xcode
-        run: |
-          ls -d /Applications/Xcode*.app
-          NEWEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
-          sudo xcode-select -s "$NEWEST"
-          xcodebuild -version
-
-      - name: Generate native iOS project
-        run: npx expo prebuild --platform ios --no-install
-
-      - name: Cache CocoaPods
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/CocoaPods
-          key: pods-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      - name: Install CocoaPods dependencies
-        run: cd ios && pod install
-
-      # fastlane 预装在 GitHub macOS runner 镜像中，无需 gem install
+          node-version: 24
+      - name: Generate lightweight iOS project
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: node ios-lite/generate-project.cjs
       - name: Build and upload to TestFlight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -49,3 +25,8 @@ jobs:
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: fastlane ios testflight
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Period-iOS-IPA
+          path: Period.ipa
