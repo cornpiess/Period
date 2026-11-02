@@ -7,7 +7,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const CHROME = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const PORT = 9333;
 const APP = "http://127.0.0.1:8888/#/";
 
@@ -17,6 +17,7 @@ const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), "period-test-"));
 
 const chrome = spawn(CHROME, [
   "--headless=new", "--disable-gpu", "--no-first-run",
+  ...(process.platform === "linux" ? ["--no-sandbox", "--no-zygote", "--single-process", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--in-process-gpu"] : []),
   `--remote-debugging-port=${PORT}`,
   "--user-data-dir=" + PROFILE,
   "about:blank",

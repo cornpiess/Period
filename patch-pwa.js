@@ -23,12 +23,17 @@ const ZIP = path.join(ROOT, "Period-PWA.zip");
 // ---------------------------------------------------------------------------
 // Step 1 — restore pristine bundle from the v1 backup
 // ---------------------------------------------------------------------------
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "period-patch-"));
-execFileSync("unzip", ["-q", "-o", ZIP, `assets/index-legacy-eCmZKwFb.js`, "sw.js", "-d", tmp], { stdio: "pipe" });
-const pristineBundle = fs.readFileSync(path.join(tmp, BUNDLE_REL), "utf8");
-const pristineSw = fs.readFileSync(path.join(tmp, "sw.js"), "utf8");
-fs.rmSync(tmp, { recursive: true, force: true });
-console.log("[ok] pristine sources extracted from Period-PWA.zip");
+let pristineBundle, pristineSw;
+if (fs.existsSync(ZIP)) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "period-patch-"));
+  execFileSync("unzip", ["-q", "-o", ZIP, BUNDLE_REL, "sw.js", "-d", tmp], {stdio:"pipe"});
+  pristineBundle = fs.readFileSync(path.join(tmp, BUNDLE_REL), "utf8");
+  pristineSw = fs.readFileSync(path.join(tmp, "sw.js"), "utf8");
+  fs.rmSync(tmp, {recursive:true,force:true});
+} else {
+  pristineBundle = fs.readFileSync(path.join(DIST, BUNDLE_REL), "utf8");
+  pristineSw = fs.readFileSync(path.join(DIST, "sw.js"), "utf8");
+}
 
 // ---------------------------------------------------------------------------
 // Step 2 — bundle patches. Anchors verified unique; replacements keep the
@@ -36,6 +41,7 @@ console.log("[ok] pristine sources extracted from Period-PWA.zip");
 // ---------------------------------------------------------------------------
 let src = pristineBundle;
 function replaceOnce(anchor, replacement, label) {
+  if (src.includes(replacement)) return;
   const count = src.split(anchor).length - 1;
   if (count !== 1) {
     console.error(`[FAIL] anchor "${label}" found ${count} times (expected 1)`);
@@ -142,6 +148,7 @@ console.log("[ok] fragments syntax-verified standalone");
 // no // comments, and every line ends on a token that forbids ASI
 const minify = (code) => code.split("\n").map((l) => l.trim()).filter(Boolean).join("");
 
+if (!src.includes("function __doAdd()")) {
 const setupAnchor = 'return eo(()=>{t.load()}),(e,n)=>(br(),Ar("div",{class:"calendar-view';
 replaceOnce(setupAnchor, minify(actionSetup) + setupAnchor, "CalendarView action handlers");
 
@@ -152,12 +159,15 @@ replaceOnce(
   "circular action button vnode"
 );
 
+}
+src = require("./scripts/patch-v13.cjs")(src);
+
 // ---------------------------------------------------------------------------
 // Step 3 — bump SW cache version relative to the latest shipped one
 // ---------------------------------------------------------------------------
 function swNextVersion() {
   let current = 1;
-  for (const p of [path.join(DIST, "sw.js"), path.join(WWW, "sw.js")]) {
+  for (const p of [path.join(DIST, "sw.js"), path.join(WWW, "sw.js"), path.join(WWW, "sw.js.txt")]) {
     const m = fs.existsSync(p) ? fs.readFileSync(p, "utf8").match(/period-pwa-v(\d+)/) : null;
     if (m) current = Math.max(current, +m[1]);
   }
