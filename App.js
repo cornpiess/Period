@@ -14,12 +14,16 @@ const ASSET_FILES = {
   'icon-512-maskable.png': require('./assets/www/icon-512-maskable.png'),
   'apple-touch-icon.png': require('./assets/www/apple-touch-icon.png'),
   'manifest.webmanifest': require('./assets/www/manifest.webmanifest'),
-  'sw.js': require('./assets/www/sw.js'),
+  'sw.js': require('./assets/www/sw.js.txt'),
   'assets/index-legacy-eCmZKwFb.js': require('./assets/www/assets/index-legacy-eCmZKwFb.js'),
   'assets/polyfills-legacy-DI84a8Gu.js': require('./assets/www/assets/polyfills-legacy-DI84a8Gu.js'),
 };
 
 const WWW_DIR = `${FileSystem.documentDirectory}period-www/`;
+const VERSION_FILE = `${WWW_DIR}.pwa-version`;
+
+// 资产版本标记：assets/www 内容变更时必须递增，启动时据此跳过整目录重拷
+const PWA_ASSETS_VERSION = '6';
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -31,38 +35,34 @@ export default function App() {
 
   async function prepareAssets() {
     try {
-      // 清理旧副本 → 确保每次启动加载最新文件
-      await FileSystem.deleteAsync(WWW_DIR, { idempotent: true });
-      await FileSystem.makeDirectoryAsync(WWW_DIR, { intermediates: true });
-
-      // 逐个复制 PWA 文件到设备文档目录
-      for (const [relPath, moduleRef] of Object.entries(ASSET_FILES)) {
-        const asset = Asset.fromModule(moduleRef);
-        await asset.downloadAsync();
-
-        const destPath = WWW_DIR + relPath;
-        const parentDir = destPath.substring(0, destPath.lastIndexOf('/'));
-        await FileSystem.makeDirectoryAsync(parentDir, { intermediates: true });
-        await FileSystem.copyAsync({ from: asset.localUri, to: destPath });
+      const installed = await FileSystem.readAsStringAsync(VERSION_FILE).catch(() => null);
+      if (installed !== PWA_ASSETS_VERSION) {
+        await copyAssets();
+        await FileSystem.writeAsStringAsync(VERSION_FILE, PWA_ASSETS_VERSION);
       }
-
-      console.log('✅ PWA 资产就绪:', WWW_DIR);
       setReady(true);
     } catch (err) {
-      console.error('❌ 准备 PWA 资产失败:', err);
+      console.error('PWA 资产准备失败:', err);
       setError(err.message);
       setReady(true); // 仍然尝试加载
     }
   }
 
-  if (!ready) {
-    return (
-      <View style={styles.loadingContainer}>
-        <StatusBar style="dark" />
-        <ActivityIndicator size="large" color="#E91E63" />
-        <Text style={styles.loadingText}>Period 加载中...</Text>
-      </View>
-    );
+  async function copyAssets() {
+    // 清理旧副本 → 确保资产更新后加载最新文件
+    await FileSystem.deleteAsync(WWW_DIR, { idempotent: true });
+    await FileSystem.makeDirectoryAsync(WWW_DIR, { intermediates: true });
+
+    // 逐个复制 PWA 文件到设备文档目录
+    for (const [relPath, moduleRef] of Object.entries(ASSET_FILES)) {
+      const asset = Asset.fromModule(moduleRef);
+      await asset.downloadAsync();
+
+      const destPath = WWW_DIR + relPath;
+      const parentDir = destPath.substring(0, destPath.lastIndexOf('/'));
+      await FileSystem.makeDirectoryAsync(parentDir, { intermediates: true });
+      await FileSystem.copyAsync({ from: asset.localUri, to: destPath });
+    }
   }
 
   const localUri = `${WWW_DIR}index.html`;
@@ -70,37 +70,46 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
-      {error && (
-        <View style={styles.errorBar}>
-          <Text style={styles.errorText}>⚠️ {error}</Text>
+      {ready ? (
+        <>
+          {error && (
+            <View style={styles.errorBar}>
+              <Text style={styles.errorText}>⚠️ {error}</Text>
+            </View>
+          )}
+          <WebView
+            source={{ uri: localUri }}
+            style={styles.webview}
+            originWhitelist={['*']}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            allowFileAccess={true}
+            mixedContentMode="always"
+            allowsInlineMediaPlayback={true}
+            mediaPlaybackRequiresUserAction={false}
+            // 加载进度指示
+            startInLoadingState={true}
+            renderLoading={() => (
+              <View style={styles.webviewLoading}>
+                <ActivityIndicator size="large" color="#E91E63" />
+              </View>
+            )}
+            onError={(syntheticEvent) => {
+              const { nativeEvent } = syntheticEvent;
+              console.error('WebView error:', nativeEvent.description);
+            }}
+            onHttpError={(syntheticEvent) => {
+              const { nativeEvent } = syntheticEvent;
+              console.warn('HTTP error:', nativeEvent.statusCode);
+            }}
+          />
+        </>
+      ) : (
+        <View style={styles.loading}>
+          <ActivityIndicator size="large" color="#E91E63" />
+          <Text style={styles.loadingText}>Period 加载中...</Text>
         </View>
       )}
-      <WebView
-        source={{ uri: localUri }}
-        style={styles.webview}
-        originWhitelist={['*']}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        allowFileAccess={true}
-        mixedContentMode="always"
-        allowsInlineMediaPlayback={true}
-        mediaPlaybackRequiresUserAction={false}
-        // 加载进度指示
-        startInLoadingState={true}
-        renderLoading={() => (
-          <View style={styles.webviewLoading}>
-            <ActivityIndicator size="large" color="#E91E63" />
-          </View>
-        )}
-        onError={(syntheticEvent) => {
-          const { nativeEvent } = syntheticEvent;
-          console.error('WebView error:', nativeEvent.description);
-        }}
-        onHttpError={(syntheticEvent) => {
-          const { nativeEvent } = syntheticEvent;
-          console.warn('HTTP error:', nativeEvent.statusCode);
-        }}
-      />
     </SafeAreaView>
   );
 }
@@ -110,11 +119,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
-  loadingContainer: {
+  loading: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
   },
   loadingText: {
     marginTop: 12,
