@@ -10,7 +10,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         let window = UIWindow(frame: UIScreen.main.bounds)
         do {
-            let controller = try PeriodController()
+            let root = try FileManager.default.url(for: .applicationSupportDirectory,
+                in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("PeriodRecords")
+            let controller = try PeriodController(recordsAt: root.appendingPathComponent("records.json"))
             self.controller = controller
             window.rootViewController = controller
         } catch {
@@ -42,10 +44,8 @@ final class PeriodController: UIViewController, WKUIDelegate, WKNavigationDelega
     private var webView: WKWebView!
     private var www: URL!
 
-    init() throws {
-        let root = try FileManager.default.url(for: .applicationSupportDirectory,
-            in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("PeriodRecords")
-        store = try RecordStore(url: root.appendingPathComponent("records.json"))
+    init(recordsAt url: URL) throws {
+        store = try RecordStore(url: url)
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("Not used") }
