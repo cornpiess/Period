@@ -17,3 +17,8 @@ Period-PWA.zip
 
 # Capacitor
 android-lite/android/app/src/main/assets/public/
+
+# Generated lightweight iOS project and build outputs
+ios-lite/Period.xcodeproj/
+ios-lite/Period/www/
+ios-lite/build/

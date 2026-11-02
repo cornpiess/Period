@@ -1,0 +1,54 @@
+name: iOS Lightweight Verification
+on:
+  push:
+    branches: ['codex/ios-lite-backup']
+  pull_request:
+    paths: ['ios-lite/**', '.github/workflows/ios-lite-check.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Generate native project
+        run: node ios-lite/generate-project.cjs
+      - name: Verify durable storage and migration
+        run: |
+          swiftc ios-lite/Period/RecordStore.swift ios-lite/Tests/main.swift -o /tmp/period-storage-tests
+          /tmp/period-storage-tests
+      - name: Compile device Release build without publishing
+        run: |
+          xcodebuild -project ios-lite/Period.xcodeproj -scheme Period -configuration Release -sdk iphoneos -derivedDataPath ios-lite/build/device CODE_SIGNING_ALLOWED=NO build > /tmp/period-device-build.log 2>&1 || { tail -100 /tmp/period-device-build.log; exit 1; }
+          du -sk ios-lite/build/device/Build/Products/Release-iphoneos/Period.app
+          python3 - <<'PY'
+          import pathlib, zipfile, json
+          app = pathlib.Path('ios-lite/build/device/Build/Products/Release-iphoneos/Period.app')
+          size = sum(p.stat().st_size for p in app.rglob('*') if p.is_file())
+          with zipfile.ZipFile('ios-lite/build/unsigned-size-estimate.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for p in app.rglob('*'):
+                  if p.is_file(): z.write(p, pathlib.Path('Payload/Period.app') / p.relative_to(app))
+          compressed = pathlib.Path('ios-lite/build/unsigned-size-estimate.zip').stat().st_size
+          report = {'unsigned_app_bytes':size, 'unsigned_zip_bytes':compressed, 'note':'Unsigned Release estimates. App Store download/install sizes require signing and Apple processing.'}
+          pathlib.Path('ios-lite/build/size-report.json').write_text(json.dumps(report, indent=2))
+          print(json.dumps(report, indent=2))
+          assert size < 10_000_000, 'Unsigned installation size exceeds 10 MB target'
+          PY
+      - name: Compile and run WebKit integration on simulator
+        run: |
+          xcodebuild -project ios-lite/Period.xcodeproj -scheme Period -configuration Debug -sdk iphonesimulator -derivedDataPath ios-lite/build/simulator CODE_SIGNING_ALLOWED=NO build > /tmp/period-simulator-build.log 2>&1 || { tail -100 /tmp/period-simulator-build.log; exit 1; }
+          python3 ios-lite/Tests/simulator-smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-lite-verification
+          path: |
+            ios-lite/build/size-report.json
+            ios-lite/build/simulator-smoke.json
+            ios-lite/build/simulator.png
+            /tmp/period-device-build.log
+            /tmp/period-simulator-build.log
