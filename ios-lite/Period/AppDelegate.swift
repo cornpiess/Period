@@ -174,10 +174,9 @@ final class PeriodController: UIViewController, WKUIDelegate, WKNavigationDelega
         do {
             let action = message["action"] as? String
             if action == "bootstrap" {
-                if !UserDefaults.standard.bool(forKey: "period.native.legacyImported") {
-                    try store.importLegacy(message["legacy"] as? [String: String] ?? [:])
-                    UserDefaults.standard.set(true, forKey: "period.native.legacyImported")
-                }
+                // The migration flag lives in the same atomic document as the
+                // records, so a backup cannot restore one without the other.
+                try store.importLegacy(message["legacy"] as? [String: String] ?? [:])
             } else if action == "write" {
                 guard let key = message["key"] as? String else { throw StoreFailure.invalidData }
                 try store.write(key: key, value: message["value"] as? String)
@@ -190,6 +189,12 @@ final class PeriodController: UIViewController, WKUIDelegate, WKNavigationDelega
             completionHandler(String(data: encoded, encoding: .utf8))
         } catch {
             completionHandler("{\"ok\":false,\"error\":\"保存失败，原记录仍保留，请重试\"}")
+            if message["action"] as? String == "bootstrap" {
+                // Don't silently run the old browser-only store when migration
+                // failed; the user must know native persistence is unavailable.
+                webView.isHidden = true
+                showFailure("记录暂时无法迁移。原记录仍保留，请保留 App 并稍后重试。")
+            }
         }
     }
 }

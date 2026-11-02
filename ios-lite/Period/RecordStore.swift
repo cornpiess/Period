@@ -64,7 +64,8 @@ final class RecordStore {
 
     static func validDate(_ value: String) -> Bool {
         let parts = value.split(separator: "-").compactMap { Int($0) }
-        guard value.count == 10, parts.count == 3 else { return false }
+        guard value.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil,
+              parts.count == 3 else { return false }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let components = DateComponents(year: parts[0], month: parts[1], day: parts[2])
