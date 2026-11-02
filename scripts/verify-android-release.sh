@@ -25,10 +25,20 @@ EXPECTED_VERSION=$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' android-lite/andr
 printf '%s\n' "$BADGING" | sed -n '1p' | grep -F "name='com.period.app' versionCode='$EXPECTED_CODE' versionName='$EXPECTED_VERSION'"
 test "$EXPECTED_CODE" -gt 2
 
-# Verify compiled adaptive resources, not just source XML.
+# Resolve actual compiled paths: AGP shortens resource filenames in release APKs.
+RESOURCE_TABLE=$("$BUILD_TOOLS/aapt2" dump resources "$APK")
+resource_path() {
+    printf '%s\n' "$RESOURCE_TABLE" | awk -v icon="$1" -v config="$2" '
+        $1 == "resource" { inside = ($3 == "mipmap/" icon) }
+        inside && $1 == "(" config ")" && $2 == "(file)" { print $3 }
+    '
+}
 for icon in ic_launcher ic_launcher_round; do
-    "$BUILD_TOOLS/aapt" dump xmltree "$APK" "res/mipmap-anydpi-v26/$icon.xml" | grep 'E: adaptive-icon'
-    "$BUILD_TOOLS/aapt" dump xmltree "$APK" "res/mipmap-anydpi-v33/$icon.xml" | grep 'E: monochrome'
+    adaptive=$(resource_path "$icon" anydpi-v26)
+    themed=$(resource_path "$icon" anydpi-v33)
+    test -n "$adaptive" && test -n "$themed"
+    "$BUILD_TOOLS/aapt" dump xmltree "$APK" "$adaptive" | grep 'E: adaptive-icon'
+    "$BUILD_TOOLS/aapt" dump xmltree "$APK" "$themed" | grep 'E: monochrome'
 done
 
 # During retirement, also cryptographically verify the actual old full APK
