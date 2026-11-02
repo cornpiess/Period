@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "main": "App.js",
   "scripts": {
+    "build:pwa": "node patch-pwa.js",
+    "test:pwa": "node test-pwa.cjs",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
