@@ -139,7 +139,7 @@ final class PeriodController: UIViewController, WKUIDelegate, WKNavigationDelega
         if(!document.querySelector('#period-icloud-status'))throw new Error('Backup explanation missing');
         return {ok:true,relaunch,records:read().length,clipboardUI:document.body.innerText.includes('已复制到剪贴板')};
         """
-        webView.callAsyncJavaScript(script, arguments: ["relaunch": relaunch], in: nil, contentWorld: .page) { [weak self] result in
+        webView.callAsyncJavaScript(script, arguments: ["relaunch": relaunch], in: nil, in: .page) { [weak self] result in
             guard let self else { return }
             var report: [String: Any]
             switch result {
